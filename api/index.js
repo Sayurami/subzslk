@@ -1,5 +1,11 @@
-import axios from "axios";
+import fetch from "node-fetch";
 import * as cheerio from "cheerio";
+
+async function axiosGet(url, options = {}) {
+  const res = await fetch(url, { headers: options.headers || {} });
+  const data = await res.text();
+  return { data };
+}
 
 const BASE_URL = "https://www.moviesublk.com";
 
@@ -30,7 +36,7 @@ export default async function handler(req, res) {
       if (!query) return res.status(400).json({ status: false, message: "query param missing" });
 
       const searchUrl = `${BASE_URL}/search?q=${encodeURIComponent(query)}`;
-      const { data } = await axios.get(searchUrl, { headers });
+      const { data } = await axiosGet(searchUrl, { headers });
       const $ = cheerio.load(data);
       const results = [];
 
@@ -56,7 +62,7 @@ export default async function handler(req, res) {
         ? `${BASE_URL}/p/1.html?q=${encodeURIComponent(query)}&m=1`
         : `${BASE_URL}/p/1.html?q=New&m=1`;
 
-      const { data } = await axios.get(listUrl, { headers });
+      const { data } = await axiosGet(listUrl, { headers });
       const $ = cheerio.load(data);
       const results = [];
 
@@ -78,7 +84,7 @@ export default async function handler(req, res) {
     if (action === "details") {
       if (!url) return res.status(400).json({ status: false, message: "url param missing" });
 
-      const { data } = await axios.get(url, { headers });
+      const { data } = await axiosGet(url, { headers });
       const $ = cheerio.load(data);
 
       const title = $("h1.post-title, h2.post-title, h1").first().text().trim();
@@ -114,7 +120,7 @@ export default async function handler(req, res) {
     if (action === "gdrive") {
       if (!url) return res.status(400).json({ status: false, message: "url param missing" });
 
-      const { data } = await axios.get(url, { headers });
+      const { data } = await axiosGet(url, { headers });
       const $ = cheerio.load(data);
       const gdriveLinks = extractGdriveLinks($, data);
 
