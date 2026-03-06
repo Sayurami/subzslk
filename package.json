@@ -1,0 +1,13 @@
+{
+  "name": "moviesublk-api",
+  "version": "1.0.0",
+  "description": "moviesublk.com scraper API – search, list, details, gdrive",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "cheerio": "^1.0.0"
+  }
+}
