@@ -3,33 +3,42 @@ const cheerio = require("cheerio");
 
 const BASE_URL = "https://www.moviesublk.com";
 const FEED_URL = `${BASE_URL}/feeds/posts/default`;
+const SCRAPER_KEY = "870f1e70c44557408c43a180ab4c78b2";
 
-const HTML_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
-  Referer: BASE_URL,
-};
+// Proxy a URL through ScraperAPI to bypass IP blocks
+function scraperUrl(target) {
+  return `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&url=${encodeURIComponent(target)}`;
+}
 
-// Fetch JSON from the Blogger feed API
+// Fetch JSON from the Blogger feed API via ScraperAPI
 async function getFeed(params) {
   const qs = new URLSearchParams({ alt: "json", "max-results": "20", ...params });
-  const res = await fetch(`${FEED_URL}?${qs}`, { headers: HTML_HEADERS });
+  const target = `${FEED_URL}?${qs}`;
+  const res = await fetch(scraperUrl(target));
   if (!res.ok) throw new Error(`Feed error: ${res.status}`);
   return res.json();
 }
 
-// Fetch HTML of a specific post page (needed for details/gdrive)
+// Fetch HTML of a specific post page via ScraperAPI
 async function getHTML(url) {
-  const res = await fetch(url, { headers: HTML_HEADERS });
+  const res = await fetch(scraperUrl(url));
   if (!res.ok) throw new Error(`HTTP error: ${res.status}`);
   return res.text();
+}
+
+// Fetch a label-based feed URL via ScraperAPI
+async function getLabelFeed(labelUrl) {
+  const qs = new URLSearchParams({ alt: "json", "max-results": "20" });
+  const target = `${labelUrl}?${qs}`;
+  const res = await fetch(scraperUrl(target));
+  if (!res.ok) throw new Error(`Feed error: ${res.status}`);
+  return res.json();
 }
 
 // Convert a Blogger feed entry to a MovieItem
 function entryToItem(entry) {
   const title = entry.title.$t || "";
   const link = (entry.link.find((l) => l.rel === "alternate") || {}).href || "";
-  // Upgrade thumbnail from s72-c to s320 for better quality
   const rawThumb = (entry.media$thumbnail || {}).url || "";
   const image = rawThumb.replace(/\/s\d+-c\//, "/s320/");
   const type = (entry.category || []).map((c) => c.term).join(", ") || null;
@@ -64,14 +73,10 @@ module.exports = async function handler(req, res) {
     // ── LIST ─────────────────────────────────────────────────────────────────
     if (action === "list") {
       let feedUrl = FEED_URL;
-      // If query looks like a label (e.g. "movie", "kdrama"), filter by label
       if (query) {
         feedUrl = `${FEED_URL}/-/${encodeURIComponent(query)}`;
       }
-      const qs = new URLSearchParams({ alt: "json", "max-results": "20" });
-      const feedRes = await fetch(`${feedUrl}?${qs}`, { headers: HTML_HEADERS });
-      if (!feedRes.ok) throw new Error(`Feed error: ${feedRes.status}`);
-      const data = await feedRes.json();
+      const data = await getLabelFeed(feedUrl);
       const entries = data.feed.entry || [];
       const results = entries.map(entryToItem).filter((r) => r.title && r.link);
       return res.json({ status: true, count: results.length, results });
@@ -90,14 +95,12 @@ module.exports = async function handler(req, res) {
         .text()
         .trim();
 
-      // Best image: first large image in the post body
       let image = "";
       $(".post-body img, .entry-content img").each((i, el) => {
         const src = $(el).attr("src") || $(el).attr("data-src") || "";
         if (src && !image) image = src;
       });
 
-      // Episodes: elements with id starting with "ep-"
       const episodes = [];
       $('[id^="ep-"]').each((i, el) => {
         const epId = $(el).attr("id") || "";
@@ -151,7 +154,6 @@ function extractGdriveLinks($, rawHtml) {
     }
   });
 
-  // Also scan raw HTML for drive URLs embedded in scripts / data attributes
   const matches = rawHtml.match(/https:\/\/drive\.google\.com\/[^\s"'<>\\]+/g) || [];
   for (const m of matches) {
     const clean = m
