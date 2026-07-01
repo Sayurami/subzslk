@@ -1,9 +1,12 @@
 const fetch = require("node-fetch");
 const cheerio = require("cheerio");
 
-const BASE_URL = "https://www.moviesublk.com";
-const FEED_URL = `${BASE_URL}/feeds/posts/default`;
 const SCRAPER_KEY = "870f1e70c44557408c43a180ab4c78b2";
+
+const SITES = {
+  movie: "https://www.moviesublk.com",
+  anime: "https://www.animesublk.com",
+};
 
 // Proxy a URL through ScraperAPI to bypass IP blocks
 function scraperUrl(target) {
@@ -11,10 +14,19 @@ function scraperUrl(target) {
 }
 
 // Fetch JSON from the Blogger feed API via ScraperAPI
-async function getFeed(params) {
+async function getFeed(baseUrl, params) {
+  const feedUrl = `${baseUrl}/feeds/posts/default`;
   const qs = new URLSearchParams({ alt: "json", "max-results": "20", ...params });
-  const target = `${FEED_URL}?${qs}`;
-  const res = await fetch(scraperUrl(target));
+  const res = await fetch(scraperUrl(`${feedUrl}?${qs}`));
+  if (!res.ok) throw new Error(`Feed error: ${res.status}`);
+  return res.json();
+}
+
+// Fetch a label-based feed via ScraperAPI
+async function getLabelFeed(baseUrl, label) {
+  const feedUrl = `${baseUrl}/feeds/posts/default/-/${encodeURIComponent(label)}`;
+  const qs = new URLSearchParams({ alt: "json", "max-results": "20" });
+  const res = await fetch(scraperUrl(`${feedUrl}?${qs}`));
   if (!res.ok) throw new Error(`Feed error: ${res.status}`);
   return res.json();
 }
@@ -26,16 +38,7 @@ async function getHTML(url) {
   return res.text();
 }
 
-// Fetch a label-based feed URL via ScraperAPI
-async function getLabelFeed(labelUrl) {
-  const qs = new URLSearchParams({ alt: "json", "max-results": "20" });
-  const target = `${labelUrl}?${qs}`;
-  const res = await fetch(scraperUrl(target));
-  if (!res.ok) throw new Error(`Feed error: ${res.status}`);
-  return res.json();
-}
-
-// Convert a Blogger feed entry to a MovieItem
+// Convert a Blogger feed entry to a result item
 function entryToItem(entry) {
   const title = entry.title.$t || "";
   const link = (entry.link.find((l) => l.rel === "alternate") || {}).href || "";
@@ -51,35 +54,48 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    const { action, query, url } = req.query;
+    const { action, query, url, site = "movie" } = req.query;
 
-    if (!action)
+    // Validate site param
+    if (!SITES[site]) {
+      return res.status(400).json({
+        status: false,
+        message: `Invalid site. Use: ${Object.keys(SITES).join(" | ")}`,
+      });
+    }
+
+    const BASE_URL = SITES[site];
+
+    if (!action) {
       return res.status(400).json({
         status: false,
         message: "action missing. Use: search | list | details | gdrive",
+        sites: Object.keys(SITES),
       });
+    }
 
     // ── SEARCH ───────────────────────────────────────────────────────────────
     if (action === "search") {
       if (!query)
         return res.status(400).json({ status: false, message: "query param missing" });
 
-      const data = await getFeed({ q: query });
+      const data = await getFeed(BASE_URL, { q: query });
       const entries = data.feed.entry || [];
       const results = entries.map(entryToItem).filter((r) => r.title && r.link);
-      return res.json({ status: true, count: results.length, results });
+      return res.json({ status: true, site, count: results.length, results });
     }
 
     // ── LIST ─────────────────────────────────────────────────────────────────
     if (action === "list") {
-      let feedUrl = FEED_URL;
+      let data;
       if (query) {
-        feedUrl = `${FEED_URL}/-/${encodeURIComponent(query)}`;
+        data = await getLabelFeed(BASE_URL, query);
+      } else {
+        data = await getFeed(BASE_URL, {});
       }
-      const data = await getLabelFeed(feedUrl);
       const entries = data.feed.entry || [];
       const results = entries.map(entryToItem).filter((r) => r.title && r.link);
-      return res.json({ status: true, count: results.length, results });
+      return res.json({ status: true, site, count: results.length, results });
     }
 
     // ── DETAILS ──────────────────────────────────────────────────────────────
@@ -101,16 +117,20 @@ module.exports = async function handler(req, res) {
         if (src && !image) image = src;
       });
 
+      // Episodes: elements with id starting with "ep-" (skip "ep-grid")
       const episodes = [];
       $('[id^="ep-"]').each((i, el) => {
         const epId = $(el).attr("id") || "";
-        if (epId) episodes.push({ ep: epId, anchor: `${url.split("#")[0]}#${epId}` });
+        if (epId && epId !== "ep-grid") {
+          episodes.push({ ep: epId, anchor: `${url.split("#")[0]}#${epId}` });
+        }
       });
 
       const gdriveLinks = extractGdriveLinks($, html);
 
       return res.json({
         status: true,
+        site,
         title,
         image,
         url,
@@ -132,7 +152,7 @@ module.exports = async function handler(req, res) {
       if (gdriveLinks.length === 0)
         return res.json({ status: false, message: "No Google Drive links found", url });
 
-      return res.json({ status: true, count: gdriveLinks.length, gdrive_links: gdriveLinks });
+      return res.json({ status: true, site, count: gdriveLinks.length, gdrive_links: gdriveLinks });
     }
 
     return res.status(400).json({ status: false, message: `Unknown action: ${action}` });
